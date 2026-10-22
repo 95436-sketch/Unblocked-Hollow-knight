@@ -1,0 +1,671 @@
+// Vite plugin that emits /threadfall-offline.html: the whole game in one file
+// (inline script + styles) so players can save it and run it without a connection.
+
+import { build, type Plugin } from 'vite'
+
+export const OFFLINE_FILE = 'threadfall-offline.html'
+const ENTRY = 'src/game/offline.ts'
+
+async function bundleGame(root: string) {
+  const out = await build({
+    root,
+    configFile: false,
+    logLevel: 'silent',
+    build: {
+      write: false,
+      minify: true,
+      lib: {
+        entry: ENTRY,
+        formats: ['iife'],
+        name: 'Threadfall',
+        fileName: 'threadfall',
+      },
+    },
+  })
+  const result = Array.isArray(out) ? out[0] : out
+  if (!('output' in result)) throw new Error('Unexpected offline build result')
+  const chunk = result.output.find((o) => o.type === 'chunk')
+  if (!chunk || chunk.type !== 'chunk')
+    throw new Error('Offline build produced no script')
+  // Keep a literal "</script>" in the bundle from closing the inline tag early.
+  return chunk.code.replace(/<\/script/gi, '<\\/script')
+}
+
+export function offlineDownload(): Plugin {
+  let root = ''
+  return {
+    name: 'threadfall-offline-download',
+    configResolved(config) {
+      root = config.root
+    },
+    configureServer(server) {
+      server.middlewares.use(`/${OFFLINE_FILE}`, (_req, res, next) => {
+        bundleGame(root)
+          .then((js) => {
+            res.setHeader('Content-Type', 'text/html; charset=utf-8')
+            res.end(page(js))
+          })
+          .catch(next)
+      })
+    },
+    async generateBundle() {
+      if (this.environment.name !== 'client') return
+      this.emitFile({
+        type: 'asset',
+        fileName: OFFLINE_FILE,
+        source: page(await bundleGame(root)),
+      })
+    },
+  }
+}
+
+function page(js: string) {
+  return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>Threadfall (offline)</title>
+<style>
+*{box-sizing:border-box}
+html,body{margin:0;min-height:100%}
+body{display:flex;min-height:100vh;align-items:center;justify-content:center;padding:16px;color:#f4ead2;
+font-family:'Palatino Linotype','Book Antiqua',Palatino,Georgia,serif;
+background:radial-gradient(60rem 30rem at 75% -10%,rgba(255,190,120,.12),transparent 70%),
+radial-gradient(50rem 40rem at 0% 100%,rgba(74,31,51,.5),transparent 70%),linear-gradient(180deg,#120c22,#0b0714)}
+.stage{position:relative;width:min(100%,calc((100vh - 32px)*16/9));aspect-ratio:960/540;overflow:hidden;
+border:1px solid #3a2d55;border-radius:12px;background:#0b0714;outline:none;
+box-shadow:0 30px 80px -20px rgba(255,180,110,.25)}
+.stage:fullscreen{width:100vw;height:100vh;border:0;border-radius:0;aspect-ratio:auto}
+canvas{display:block;width:100%;height:100%;object-fit:contain}
+.ov{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;flex-direction:column;
+padding:24px;text-align:center;background:rgba(11,7,20,.55);backdrop-filter:blur(2px)}
+.ov[hidden],[hidden]{display:none}
+.eyebrow{margin:0 0 .5rem;font-size:.7rem;letter-spacing:.4em;text-transform:uppercase;color:#ffcf7a}
+h1,h2{margin:0;font-weight:600;letter-spacing:.08em;text-shadow:0 0 24px rgba(255,207,122,.35);font-size:clamp(2.2rem,7vw,4.5rem)}
+.lede{max-width:28rem;margin:.75rem auto 0;color:rgba(217,205,180,.8)}
+.small{margin-top:.75rem;font-size:.75rem;color:rgba(217,205,180,.5)}
+.best{margin-top:1rem;font-size:.75rem;letter-spacing:.2em;text-transform:uppercase;color:rgba(255,207,122,.8)}
+.row{display:flex;flex-wrap:wrap;gap:12px;justify-content:center;margin-top:1.5rem}
+.cta,.ghost{display:inline-flex;align-items:center;gap:.5rem;border-radius:999px;padding:.7rem 1.5rem;font:inherit;
+font-size:.85rem;letter-spacing:.15em;text-transform:uppercase;cursor:pointer;transition:all .15s}
+.cta{border:0;background:#f4ead2;color:#0b0714;box-shadow:0 0 30px rgba(255,207,122,.35)}
+.cta:hover,.cta:focus-visible{background:#ffcf7a;outline:none}
+.ghost{border:1px solid rgba(244,234,210,.35);background:none;color:#f4ead2}
+.ghost:hover{border-color:#ffcf7a;color:#ffcf7a}
+dl{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin:1.5rem auto 0;min-width:16rem}
+dt{font-size:10px;letter-spacing:.25em;text-transform:uppercase;color:rgba(217,205,180,.6)}
+dd{margin:4px 0 0;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:1.1rem}
+.tools{position:absolute;right:12px;bottom:12px;display:flex;gap:8px}
+.tools button{width:36px;height:36px;border-radius:50%;border:1px solid rgba(244,234,210,.2);background:rgba(11,7,20,.6);
+color:rgba(244,234,210,.8);font-size:13px;cursor:pointer}
+.tools button:hover{border-color:rgba(255,207,122,.6);color:#ffcf7a}
+</style>
+</head>
+<body>
+<div id="stage" class="stage" tabindex="-1">
+<canvas id="screen" aria-label="Threadfall game screen"></canvas>
+<div id="ov-title" class="ov">
+<p class="eyebrow">A tale of silk &amp; thorn</p>
+<h1>Threadfall</h1>
+<p class="lede">Climb from the Spindle Gate to the Great Bell. Strike with your needle, weave silk to mend, and bring down the Warden.</p>
+<div class="row"><button class="cta" data-begin>&#9654; Begin your journey</button></div>
+<p class="small">or press Enter &middot; arrows/WASD move, Space jumps, X strikes, Shift dashes, F binds, Esc pauses</p>
+<p id="best" class="best"></p>
+</div>
+<div id="ov-paused" class="ov" hidden>
+<h2>Paused</h2>
+<div class="row"><button id="btn-resume" class="cta">&#9654; Resume</button><button class="ghost" data-begin>&#8635; Restart</button></div>
+<p class="small">Esc or P to resume</p>
+</div>
+<div id="ov-won" class="ov" hidden>
+<p class="eyebrow">The Great Bell rings</p>
+<h2>Ascended</h2>
+<dl><div><dt>Time</dt><dd id="st-time"></dd></div><div><dt>Glimmer</dt><dd id="st-glimmer"></dd></div><div><dt>Falls</dt><dd id="st-falls"></dd></div></dl>
+<p id="new-best" class="best" hidden>New best ascent</p>
+<div class="row"><button class="cta" data-begin>&#8635; Climb again</button></div>
+</div>
+<div class="tools">
+<button id="btn-pause" type="button" aria-label="Pause" title="Pause" hidden></button>
+<button id="btn-mute" type="button" aria-label="Mute" title="Mute">&#128266;</button>
+<button id="btn-full" type="button" aria-label="Fullscreen" title="Fullscreen">&#10530;</button>
+</div>
+</div>
+<script>${js}</script>
+</body>
+</html>
+`
+}
+
+src/game/offline.ts
+added
++109
+// Entry for the downloadable single-file copy (threadfall-offline.html).
+// Plain DOM instead of React so the whole game inlines into one small script.
+
+import {
+  ThreadfallGame,
+  formatTime,
+  type RunStats,
+  type Status,
+} from './engine'
+
+const BEST_KEY = 'threadfall:best'
+
+const $ = <T extends HTMLElement>(id: string) =>
+  document.getElementById(id) as T
+
+function readBest() {
+  try {
+    return Number(localStorage.getItem(BEST_KEY)) || 0
+  } catch {
+    // file:// pages can have storage disabled; best time is optional.
+    return 0
+  }
+}
+
+function writeBest(t: number) {
+  try {
+    localStorage.setItem(BEST_KEY, String(t))
+  } catch {
+    /* ignore */
+  }
+}
+
+function boot() {
+  const stage = $<HTMLDivElement>('stage')
+  const overlays: Record<'title' | 'paused' | 'won', HTMLElement> = {
+    title: $('ov-title'),
+    paused: $('ov-paused'),
+    won: $('ov-won'),
+  }
+  const pauseBtn = $<HTMLButtonElement>('btn-pause')
+  const muteBtn = $<HTMLButtonElement>('btn-mute')
+  let status: Status = 'title'
+  let muted = false
+
+  const showBest = () => {
+    const best = readBest()
+    $('best').textContent = best > 0 ? `Best ascent ${formatTime(best)}` : ''
+  }
+
+  const onStatus = (s: Status, st: RunStats) => {
+    status = s
+    for (const [k, el] of Object.entries(overlays)) el.hidden = k !== s
+    pauseBtn.hidden = s !== 'playing' && s !== 'paused'
+    pauseBtn.textContent = s === 'paused' ? '▶' : '❚❚'
+    if (s === 'won') {
+      $('st-time').textContent = formatTime(st.time)
+      $('st-glimmer').textContent = `${st.glimmer}/${st.totalGlimmer}`
+      $('st-falls').textContent = String(st.deaths)
+      const prev = readBest() || Infinity
+      const record = st.time < prev
+      $('new-best').hidden = !record
+      if (record) writeBest(st.time)
+    }
+    if (s === 'title') showBest()
+    overlays[s as keyof typeof overlays]
+      ?.querySelector<HTMLButtonElement>('button')
+      ?.focus()
+  }
+
+  const game = new ThreadfallGame($<HTMLCanvasElement>('screen'), onStatus)
+  showBest()
+
+  const begin = () => {
+    game.start()
+    stage.focus()
+  }
+
+  document
+    .querySelectorAll('[data-begin]')
+    .forEach((b) => b.addEventListener('click', begin))
+  $('btn-resume').addEventListener('click', () => game.resume())
+  pauseBtn.addEventListener('click', () => {
+    game.togglePause()
+    pauseBtn.blur()
+  })
+  muteBtn.addEventListener('click', () => {
+    muted = !muted
+    game.setMuted(muted)
+    muteBtn.textContent = muted ? '🔇' : '🔊'
+    muteBtn.setAttribute('aria-label', muted ? 'Unmute' : 'Mute')
+    muteBtn.blur()
+  })
+  $('btn-full').addEventListener('click', (e) => {
+    if (document.fullscreenElement) void document.exitFullscreen()
+    else void stage.requestFullscreen?.()
+    ;(e.currentTarget as HTMLElement).blur()
+  })
+
+  window.addEventListener('keydown', (e) => {
+    if (e.code === 'Enter' && (status === 'title' || status === 'won')) begin()
+  })
+  window.addEventListener('resize', () => game.resize())
+  document.addEventListener(
+    'visibilitychange',
+    () => document.hidden && game.pause(),
+  )
+}
+
+boot()
+
+src/routes/index.tsx
+changed
++29
+-4
+import { createFileRoute } from '@tanstack/react-router'
+import { Download } from 'lucide-react'
+
+import { GameStage } from '@/game/GameStage'
+
+
+      <section className="mx-auto max-w-6xl px-5 pt-6 pb-10 sm:px-8">
+        <GameStage />
+        <div className="mt-5 flex flex-col items-center justify-between gap-3 sm:flex-row">
+          <p className="text-sm text-[#d9cdb4]/70">
+            Save Threadfall as a single file and play it later with no internet
+            connection.
+          </p>
+          <a
+            className="ghost shrink-0"
+            href="/threadfall-offline.html"
+            download="threadfall.html"
+          >
+            <Download className="size-4" /> Download offline copy
+          </a>
+        </div>
+      </section>
+
+      <section className="mx-auto grid max-w-6xl gap-6 px-5 pb-16 sm:px-8 md:grid-cols-[1.1fr_1fr]">
+          <h2 className="panel-title">Controls</h2>
+          <dl className="mt-4 divide-y divide-[#3a2d55]/70">
+            {CONTROLS.map(([action, keys]) => (
+              <div key={action} className="flex items-center justify-between gap-4 py-2.5">
+              <div
+                key={action}
+                className="flex items-center justify-between gap-4 py-2.5"
+              >
+                <dt className="text-sm text-[#d9cdb4]">{action}</dt>
+                <dd className="text-right font-mono text-xs text-[#ffcf7a]">{keys}</dd>
+                <dd className="text-right font-mono text-xs text-[#ffcf7a]">
+                  {keys}
+                </dd>
+              </div>
+            ))}
+          </dl>
+          <h2 className="panel-title">Wanderer's notes</h2>
+          <ul className="mt-4 space-y-3">
+            {TIPS.map((t) => (
+              <li key={t} className="flex gap-3 text-sm leading-relaxed text-[#d9cdb4]">
+                <span className="mt-2 size-1.5 shrink-0 rotate-45 bg-[#ffcf7a]" aria-hidden />
+              <li
+                key={t}
+                className="flex gap-3 text-sm leading-relaxed text-[#d9cdb4]"
+              >
+                <span
+                  className="mt-2 size-1.5 shrink-0 rotate-45 bg-[#ffcf7a]"
+                  aria-hidden
+                />
+                {t}
+              </li>
+            ))}
+
+vite.config.ts
+changed
++9
+-1
+import tailwindcss from '@tailwindcss/vite'
+import netlify from '@netlify/vite-plugin-tanstack-start'
+
+import { offlineDownload } from './offline-download'
+
+const config = defineConfig({
+  resolve: { tsconfigPaths: true },
+  plugins: [tailwindcss(), netlify(), tanstackStart(), viteReact()],
+  plugins: [
+    tailwindcss(),
+    netlify(),
+    tanstackStart(),
+    viteReact(),
+    offlineDownload(),
+  ],
+})
+
+export default config// Vite plugin that emits /threadfall-offline.html: the whole game in one file
+// (inline script + styles) so players can save it and run it without a connection.
+
+import { build, type Plugin } from 'vite'
+
+export const OFFLINE_FILE = 'threadfall-offline.html'
+const ENTRY = 'src/game/offline.ts'
+
+async function bundleGame(root: string) {
+  const out = await build({
+    root,
+    configFile: false,
+    logLevel: 'silent',
+    build: {
+      write: false,
+      minify: true,
+      lib: {
+        entry: ENTRY,
+        formats: ['iife'],
+        name: 'Threadfall',
+        fileName: 'threadfall',
+      },
+    },
+  })
+  const result = Array.isArray(out) ? out[0] : out
+  if (!('output' in result)) throw new Error('Unexpected offline build result')
+  const chunk = result.output.find((o) => o.type === 'chunk')
+  if (!chunk || chunk.type !== 'chunk')
+    throw new Error('Offline build produced no script')
+  // Keep a literal "</script>" in the bundle from closing the inline tag early.
+  return chunk.code.replace(/<\/script/gi, '<\\/script')
+}
+
+export function offlineDownload(): Plugin {
+  let root = ''
+  return {
+    name: 'threadfall-offline-download',
+    configResolved(config) {
+      root = config.root
+    },
+    configureServer(server) {
+      server.middlewares.use(`/${OFFLINE_FILE}`, (_req, res, next) => {
+        bundleGame(root)
+          .then((js) => {
+            res.setHeader('Content-Type', 'text/html; charset=utf-8')
+            res.end(page(js))
+          })
+          .catch(next)
+      })
+    },
+    async generateBundle() {
+      if (this.environment.name !== 'client') return
+      this.emitFile({
+        type: 'asset',
+        fileName: OFFLINE_FILE,
+        source: page(await bundleGame(root)),
+      })
+    },
+  }
+}
+
+function page(js: string) {
+  return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<title>Threadfall (offline)</title>
+<style>
+*{box-sizing:border-box}
+html,body{margin:0;min-height:100%}
+body{display:flex;min-height:100vh;align-items:center;justify-content:center;padding:16px;color:#f4ead2;
+font-family:'Palatino Linotype','Book Antiqua',Palatino,Georgia,serif;
+background:radial-gradient(60rem 30rem at 75% -10%,rgba(255,190,120,.12),transparent 70%),
+radial-gradient(50rem 40rem at 0% 100%,rgba(74,31,51,.5),transparent 70%),linear-gradient(180deg,#120c22,#0b0714)}
+.stage{position:relative;width:min(100%,calc((100vh - 32px)*16/9));aspect-ratio:960/540;overflow:hidden;
+border:1px solid #3a2d55;border-radius:12px;background:#0b0714;outline:none;
+box-shadow:0 30px 80px -20px rgba(255,180,110,.25)}
+.stage:fullscreen{width:100vw;height:100vh;border:0;border-radius:0;aspect-ratio:auto}
+canvas{display:block;width:100%;height:100%;object-fit:contain}
+.ov{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;flex-direction:column;
+padding:24px;text-align:center;background:rgba(11,7,20,.55);backdrop-filter:blur(2px)}
+.ov[hidden],[hidden]{display:none}
+.eyebrow{margin:0 0 .5rem;font-size:.7rem;letter-spacing:.4em;text-transform:uppercase;color:#ffcf7a}
+h1,h2{margin:0;font-weight:600;letter-spacing:.08em;text-shadow:0 0 24px rgba(255,207,122,.35);font-size:clamp(2.2rem,7vw,4.5rem)}
+.lede{max-width:28rem;margin:.75rem auto 0;color:rgba(217,205,180,.8)}
+.small{margin-top:.75rem;font-size:.75rem;color:rgba(217,205,180,.5)}
+.best{margin-top:1rem;font-size:.75rem;letter-spacing:.2em;text-transform:uppercase;color:rgba(255,207,122,.8)}
+.row{display:flex;flex-wrap:wrap;gap:12px;justify-content:center;margin-top:1.5rem}
+.cta,.ghost{display:inline-flex;align-items:center;gap:.5rem;border-radius:999px;padding:.7rem 1.5rem;font:inherit;
+font-size:.85rem;letter-spacing:.15em;text-transform:uppercase;cursor:pointer;transition:all .15s}
+.cta{border:0;background:#f4ead2;color:#0b0714;box-shadow:0 0 30px rgba(255,207,122,.35)}
+.cta:hover,.cta:focus-visible{background:#ffcf7a;outline:none}
+.ghost{border:1px solid rgba(244,234,210,.35);background:none;color:#f4ead2}
+.ghost:hover{border-color:#ffcf7a;color:#ffcf7a}
+dl{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin:1.5rem auto 0;min-width:16rem}
+dt{font-size:10px;letter-spacing:.25em;text-transform:uppercase;color:rgba(217,205,180,.6)}
+dd{margin:4px 0 0;font-family:ui-monospace,Menlo,Consolas,monospace;font-size:1.1rem}
+.tools{position:absolute;right:12px;bottom:12px;display:flex;gap:8px}
+.tools button{width:36px;height:36px;border-radius:50%;border:1px solid rgba(244,234,210,.2);background:rgba(11,7,20,.6);
+color:rgba(244,234,210,.8);font-size:13px;cursor:pointer}
+.tools button:hover{border-color:rgba(255,207,122,.6);color:#ffcf7a}
+</style>
+</head>
+<body>
+<div id="stage" class="stage" tabindex="-1">
+<canvas id="screen" aria-label="Threadfall game screen"></canvas>
+<div id="ov-title" class="ov">
+<p class="eyebrow">A tale of silk &amp; thorn</p>
+<h1>Threadfall</h1>
+<p class="lede">Climb from the Spindle Gate to the Great Bell. Strike with your needle, weave silk to mend, and bring down the Warden.</p>
+<div class="row"><button class="cta" data-begin>&#9654; Begin your journey</button></div>
+<p class="small">or press Enter &middot; arrows/WASD move, Space jumps, X strikes, Shift dashes, F binds, Esc pauses</p>
+<p id="best" class="best"></p>
+</div>
+<div id="ov-paused" class="ov" hidden>
+<h2>Paused</h2>
+<div class="row"><button id="btn-resume" class="cta">&#9654; Resume</button><button class="ghost" data-begin>&#8635; Restart</button></div>
+<p class="small">Esc or P to resume</p>
+</div>
+<div id="ov-won" class="ov" hidden>
+<p class="eyebrow">The Great Bell rings</p>
+<h2>Ascended</h2>
+<dl><div><dt>Time</dt><dd id="st-time"></dd></div><div><dt>Glimmer</dt><dd id="st-glimmer"></dd></div><div><dt>Falls</dt><dd id="st-falls"></dd></div></dl>
+<p id="new-best" class="best" hidden>New best ascent</p>
+<div class="row"><button class="cta" data-begin>&#8635; Climb again</button></div>
+</div>
+<div class="tools">
+<button id="btn-pause" type="button" aria-label="Pause" title="Pause" hidden></button>
+<button id="btn-mute" type="button" aria-label="Mute" title="Mute">&#128266;</button>
+<button id="btn-full" type="button" aria-label="Fullscreen" title="Fullscreen">&#10530;</button>
+</div>
+</div>
+<script>${js}</script>
+</body>
+</html>
+`
+}
+
+src/game/offline.ts
+added
++109
+// Entry for the downloadable single-file copy (threadfall-offline.html).
+// Plain DOM instead of React so the whole game inlines into one small script.
+
+import {
+  ThreadfallGame,
+  formatTime,
+  type RunStats,
+  type Status,
+} from './engine'
+
+const BEST_KEY = 'threadfall:best'
+
+const $ = <T extends HTMLElement>(id: string) =>
+  document.getElementById(id) as T
+
+function readBest() {
+  try {
+    return Number(localStorage.getItem(BEST_KEY)) || 0
+  } catch {
+    // file:// pages can have storage disabled; best time is optional.
+    return 0
+  }
+}
+
+function writeBest(t: number) {
+  try {
+    localStorage.setItem(BEST_KEY, String(t))
+  } catch {
+    /* ignore */
+  }
+}
+
+function boot() {
+  const stage = $<HTMLDivElement>('stage')
+  const overlays: Record<'title' | 'paused' | 'won', HTMLElement> = {
+    title: $('ov-title'),
+    paused: $('ov-paused'),
+    won: $('ov-won'),
+  }
+  const pauseBtn = $<HTMLButtonElement>('btn-pause')
+  const muteBtn = $<HTMLButtonElement>('btn-mute')
+  let status: Status = 'title'
+  let muted = false
+
+  const showBest = () => {
+    const best = readBest()
+    $('best').textContent = best > 0 ? `Best ascent ${formatTime(best)}` : ''
+  }
+
+  const onStatus = (s: Status, st: RunStats) => {
+    status = s
+    for (const [k, el] of Object.entries(overlays)) el.hidden = k !== s
+    pauseBtn.hidden = s !== 'playing' && s !== 'paused'
+    pauseBtn.textContent = s === 'paused' ? '▶' : '❚❚'
+    if (s === 'won') {
+      $('st-time').textContent = formatTime(st.time)
+      $('st-glimmer').textContent = `${st.glimmer}/${st.totalGlimmer}`
+      $('st-falls').textContent = String(st.deaths)
+      const prev = readBest() || Infinity
+      const record = st.time < prev
+      $('new-best').hidden = !record
+      if (record) writeBest(st.time)
+    }
+    if (s === 'title') showBest()
+    overlays[s as keyof typeof overlays]
+      ?.querySelector<HTMLButtonElement>('button')
+      ?.focus()
+  }
+
+  const game = new ThreadfallGame($<HTMLCanvasElement>('screen'), onStatus)
+  showBest()
+
+  const begin = () => {
+    game.start()
+    stage.focus()
+  }
+
+  document
+    .querySelectorAll('[data-begin]')
+    .forEach((b) => b.addEventListener('click', begin))
+  $('btn-resume').addEventListener('click', () => game.resume())
+  pauseBtn.addEventListener('click', () => {
+    game.togglePause()
+    pauseBtn.blur()
+  })
+  muteBtn.addEventListener('click', () => {
+    muted = !muted
+    game.setMuted(muted)
+    muteBtn.textContent = muted ? '🔇' : '🔊'
+    muteBtn.setAttribute('aria-label', muted ? 'Unmute' : 'Mute')
+    muteBtn.blur()
+  })
+  $('btn-full').addEventListener('click', (e) => {
+    if (document.fullscreenElement) void document.exitFullscreen()
+    else void stage.requestFullscreen?.()
+    ;(e.currentTarget as HTMLElement).blur()
+  })
+
+  window.addEventListener('keydown', (e) => {
+    if (e.code === 'Enter' && (status === 'title' || status === 'won')) begin()
+  })
+  window.addEventListener('resize', () => game.resize())
+  document.addEventListener(
+    'visibilitychange',
+    () => document.hidden && game.pause(),
+  )
+}
+
+boot()
+
+src/routes/index.tsx
+changed
++29
+-4
+import { createFileRoute } from '@tanstack/react-router'
+import { Download } from 'lucide-react'
+
+import { GameStage } from '@/game/GameStage'
+
+
+      <section className="mx-auto max-w-6xl px-5 pt-6 pb-10 sm:px-8">
+        <GameStage />
+        <div className="mt-5 flex flex-col items-center justify-between gap-3 sm:flex-row">
+          <p className="text-sm text-[#d9cdb4]/70">
+            Save Threadfall as a single file and play it later with no internet
+            connection.
+          </p>
+          <a
+            className="ghost shrink-0"
+            href="/threadfall-offline.html"
+            download="threadfall.html"
+          >
+            <Download className="size-4" /> Download offline copy
+          </a>
+        </div>
+      </section>
+
+      <section className="mx-auto grid max-w-6xl gap-6 px-5 pb-16 sm:px-8 md:grid-cols-[1.1fr_1fr]">
+          <h2 className="panel-title">Controls</h2>
+          <dl className="mt-4 divide-y divide-[#3a2d55]/70">
+            {CONTROLS.map(([action, keys]) => (
+              <div key={action} className="flex items-center justify-between gap-4 py-2.5">
+              <div
+                key={action}
+                className="flex items-center justify-between gap-4 py-2.5"
+              >
+                <dt className="text-sm text-[#d9cdb4]">{action}</dt>
+                <dd className="text-right font-mono text-xs text-[#ffcf7a]">{keys}</dd>
+                <dd className="text-right font-mono text-xs text-[#ffcf7a]">
+                  {keys}
+                </dd>
+              </div>
+            ))}
+          </dl>
+          <h2 className="panel-title">Wanderer's notes</h2>
+          <ul className="mt-4 space-y-3">
+            {TIPS.map((t) => (
+              <li key={t} className="flex gap-3 text-sm leading-relaxed text-[#d9cdb4]">
+                <span className="mt-2 size-1.5 shrink-0 rotate-45 bg-[#ffcf7a]" aria-hidden />
+              <li
+                key={t}
+                className="flex gap-3 text-sm leading-relaxed text-[#d9cdb4]"
+              >
+                <span
+                  className="mt-2 size-1.5 shrink-0 rotate-45 bg-[#ffcf7a]"
+                  aria-hidden
+                />
+                {t}
+              </li>
+            ))}
+
+vite.config.ts
+changed
++9
+-1
+import tailwindcss from '@tailwindcss/vite'
+import netlify from '@netlify/vite-plugin-tanstack-start'
+
+import { offlineDownload } from './offline-download'
+
+const config = defineConfig({
+  resolve: { tsconfigPaths: true },
+  plugins: [tailwindcss(), netlify(), tanstackStart(), viteReact()],
+  plugins: [
+    tailwindcss(),
+    netlify(),
+    tanstackStart(),
+    viteReact(),
+    offlineDownload(),
+  ],
+})
+
+export default config
